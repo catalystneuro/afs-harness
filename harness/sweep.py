@@ -21,11 +21,16 @@ import random
 import subprocess
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
 HARNESS = Path(__file__).resolve().parent
+sys.path.insert(0, str(HARNESS))
+from provenance import seconds_until_reset  # noqa: E402
+
+MAX_RESET_WAIT = 3 * 3600   # longer than this and the cell is left for a later relaunch
 LOCK = threading.Lock()
 
 
@@ -52,6 +57,13 @@ def run_cell(lane, problem, rep, max_attempts, log, smoke, stop):
             return lane, problem, rep, status, detail
         if status != "infra_error":
             return lane, problem, rep, status, detail
+        # A spent usage limit names its reset time; retrying before then only fails again.
+        wait = seconds_until_reset(detail)
+        if wait is not None:
+            if wait > MAX_RESET_WAIT:
+                return lane, problem, rep, "infra_error_exhausted", detail
+            print(f"usage limit: waiting {wait / 60:.0f} min for the reset", flush=True)
+            time.sleep(wait + 60)
     return lane, problem, rep, "infra_error_exhausted", detail
 
 

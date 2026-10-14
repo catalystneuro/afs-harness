@@ -18,12 +18,31 @@ Prints one tab-separated status line: lane problem rep attempt status detail
 import argparse
 import hashlib
 import json
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 EXPECTED_SKILLS = {"analyzing-dandi-datasets", "using-nemos", "using-pynapple"}
 INFRA_MARKERS = ("overloaded", "rate_limit", "rate limit", "api_error", "529", "503", "502",
                  "ECONNRESET", "socket hang up", "issue with the selected model",
                  "usage limit", "limit reached", "hit your limit")
+# A subscription's usage limit ends the session with an ordinary assistant message, for example
+# "You've hit your session limit · resets 4:40pm (UTC)", not with a failed API call.
+USAGE_LIMIT_RE = re.compile(r"hit your (?:\w+ )?limit", re.I)
+RESET_RE = re.compile(r"resets (\d{1,2})(?::(\d{2}))?\s*([ap]m) \(UTC\)", re.I)
+
+
+def seconds_until_reset(text, now=None):
+    """Seconds until the usage-limit reset named in text ("resets 4:40pm (UTC)"), or None."""
+    m = RESET_RE.search(text or "")
+    if not m:
+        return None
+    now = now or datetime.now(timezone.utc)
+    hour = int(m.group(1)) % 12 + (12 if m.group(3).lower() == "pm" else 0)
+    reset = now.replace(hour=hour, minute=int(m.group(2) or 0), second=0, microsecond=0)
+    if reset <= now:
+        reset += timedelta(days=1)
+    return (reset - now).total_seconds()
 
 
 def ended_on_api_retry(events):
@@ -41,7 +60,8 @@ def classify(events, init, result, stderr):
         return "infra_error", "empty transcript"
     if result.get("subtype") == "success" and not result.get("is_error"):
         return "success", f"{result.get('num_turns')} turns"
-    if any(m.lower() in (stderr + result_text).lower() for m in INFRA_MARKERS) or result.get("subtype") is None:
+    if any(m.lower() in (stderr + result_text).lower() for m in INFRA_MARKERS) or result.get("subtype") is None \
+            or USAGE_LIMIT_RE.search(result_text):
         return "infra_error", (result_text or stderr)[-200:].replace("\n", " ")
     if ended_on_api_retry(events):
         return "infra_error", "ended while retrying a failed API call: " + result_text[-150:].replace("\n", " ")
