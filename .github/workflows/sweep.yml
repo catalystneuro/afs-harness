@@ -1,0 +1,195 @@
+name: Benchmark sweep
+
+# Runs benchmark cells (lane, problem, rep) through harness/run_clean.sh, one cell per job on a
+# fresh runner. Started by hand from the Actions tab or with
+#   gh workflow run sweep.yml -f lane=opus-5-5 -f problems=placefields -f reps=1
+#
+# This repository holds only the harness, and is public so that jobs get the 16 GB standard
+# runners; the private-repository runners (8 GB) ran out of memory on the ring-attractor problem.
+# Each job copies the harness out of the checkout and deletes the checkout before any agent
+# starts, so the agent's working tree holds nothing but its own run. The agent runs on the
+# subscription token in the CLAUDE_CODE_OAUTH_TOKEN secret, with the credential scrub on: its
+# commands run in Claude Code's sandbox and cannot see the token. A one-turn preflight checks
+# the token, the permission mode, the sandboxed shell, the scrub, and the Python environment
+# before the real run. The install and preflight steps are adapted from the Agent run workflow
+# in catalystneuro/reproduction-registry (commit fd4f598).
+#
+# Results are uploaded as one artifact per cell (transcript, outputs, provenance.json, and the
+# attempts log). Download them with `gh run download <run-id>`; artifacts expire after 90 days.
+
+on:
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: "Lane from harness/lanes.tsv (Anthropic lanes only)"
+        required: true
+      problems:
+        description: "Space-separated problems from harness/problems.tsv, or all"
+        default: all
+      reps:
+        description: "Repetitions per problem"
+        default: "5"
+      first_rep:
+        description: "Number of the first rep (to add reps to an earlier sweep)"
+        default: "1"
+      smoke:
+        description: "Smoke test: one-word reply, $1 cap"
+        type: boolean
+        default: false
+      max_parallel:
+        description: "Jobs at once"
+        default: "4"
+      seed:
+        description: "Seed for the order of cells"
+        default: "1"
+
+permissions:
+  contents: read
+
+env:
+  AFS_CLI_VERSION: 2.1.282
+  # Outside the checkout and outside any git repository.
+  AFS_SWEEP_DIR: /home/runner/sweep
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      cells: ${{ steps.plan.outputs.cells }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: plan
+        env:
+          LANE: ${{ inputs.lane }}
+          PROBLEMS: ${{ inputs.problems }}
+          REPS: ${{ inputs.reps }}
+          FIRST: ${{ inputs.first_rep }}
+          SEED: ${{ inputs.seed }}
+          SMOKE: ${{ inputs.smoke }}
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
+          import json, os, random
+          keys = lambda f: [l.split("\t")[0] for l in open(f) if l.strip() and not l.startswith("#")]
+          lanes = {l.split("\t")[0]: l.rstrip("\n").split("\t") for l in open("harness/lanes.tsv") if l.strip() and not l.startswith("#")}
+          lane = os.environ["LANE"]
+          assert lane in lanes, f"unknown lane {lane}"
+          assert not lanes[lane][2], f"{lane} needs a proxy, which this workflow does not run"
+          problems = keys("harness/problems.tsv") if os.environ["PROBLEMS"] == "all" else os.environ["PROBLEMS"].split()
+          assert set(problems) <= set(keys("harness/problems.tsv")), f"unknown problems {problems}"
+          first, reps = int(os.environ["FIRST"]), int(os.environ["REPS"])
+          if os.environ["SMOKE"] == "true":
+              problems, reps = problems[:1], 1
+          cells = [{"problem": p, "rep": r} for p in problems for r in range(first, first + reps)]
+          random.Random(int(os.environ["SEED"])).shuffle(cells)
+          print("cells=" + json.dumps(cells))
+          EOF
+
+  run:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(inputs.max_parallel) }}
+      matrix:
+        cell: ${{ fromJSON(needs.plan.outputs.cells) }}
+    name: ${{ inputs.lane }} ${{ matrix.cell.problem }} ${{ matrix.cell.rep }}
+    env:
+      LANE: ${{ inputs.lane }}
+      PROBLEM: ${{ matrix.cell.problem }}
+      REP: ${{ matrix.cell.rep }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code, uv, and the sandbox
+        run: |
+          # The credential scrub runs the agent's commands in a sandbox built on bubblewrap and
+          # socat. Bubblewrap needs unprivileged user namespaces; Ubuntu 24.04 restricts them.
+          sudo apt-get install -y -q bubblewrap socat
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / --unshare-all true && echo "bubblewrap works"
+          npm install -g "@anthropic-ai/claude-code@$AFS_CLI_VERSION"
+          pip install --no-cache-dir uv
+          claude --version
+
+      - name: Move the harness out and delete the checkout
+        run: |
+          set -euo pipefail
+          mkdir -p "$AFS_SWEEP_DIR"
+          cp -R harness "$RUNNER_TEMP/harness"
+          cd "$RUNNER_TEMP" && find "$GITHUB_WORKSPACE" -mindepth 1 -delete
+          git -C "$AFS_SWEEP_DIR" rev-parse 2>/dev/null && { echo "::error::sweep dir is inside a git repo"; exit 1; } || true
+
+      - name: Check the token, the permission mode, the agent's shell, and its Python
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set +e -uo pipefail
+          h="$RUNNER_TEMP/harness"; pre="$RUNNER_TEMP/preflight"; mkdir -p "$pre/work" "$pre/home"
+          uv venv -q --python python3.12 "$pre/venv" && VIRTUAL_ENV="$pre/venv" uv pip install -q -r "$h/requirements.lock"
+          model=$(awk -F'\t' -v k="$LANE" '$1==k{print $2}' "$h/lanes.tsv")
+          # Same environment as run_clean.sh. The agent runs one command that prints the length of
+          # the token as its commands see it (0 when scrubbed), imports the analysis stack, and
+          # writes to the remfile cache directory.
+          cd "$pre/work"
+          env -i HOME="$pre/home" CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 \
+            DISABLE_AUTOUPDATER=1 DISABLE_TELEMETRY=1 VIRTUAL_ENV="$pre/venv" \
+            PATH="$pre/venv/bin:/usr/local/bin:/usr/bin:/bin:$(dirname "$(command -v claude)")" \
+            claude -p 'Use the Bash tool to run exactly this command: printf "%s:" "$(printenv CLAUDE_CODE_OAUTH_TOKEN | wc -c)"; python -c "import pynapple, pynwb, lindi, remfile" && mkdir -p /tmp/remfile_cache && touch /tmp/remfile_cache/.w && echo shell-ok. Then reply with only the line it printed.' \
+            --model "$model" --max-turns 3 --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
+            --output-format stream-json --verbose --permission-prompts none --allowedTools Bash \
+            > "$pre/preflight.jsonl" 2> "$pre/preflight.err"
+          mode=$(jq -r 'select(.type=="system" and .subtype=="init") | .permissionMode' "$pre/preflight.jsonl")
+          result=$(jq -r 'select(.type=="result") | .result' "$pre/preflight.jsonl")
+          echo "permission mode: $mode; reply: $result"
+          tail -c 1000 "$pre/preflight.err"
+          case "$result" in
+            *"Failed to authenticate"*) echo "::error::The CLAUDE_CODE_OAUTH_TOKEN secret did not authenticate: $result"; exit 1;;
+          esac
+          [[ "$result" == *shell-ok* ]] || { echo "::error::The agent's shell, Python stack, or cache write failed: $result"; exit 1; }
+          [[ "$result" =~ (^|[^0-9])0:shell-ok ]] || { echo "::error::The token is visible to the agent's commands"; exit 1; }
+          [ "$mode" = default ] || { echo "::error::Claude Code started in permission mode $mode, not default"; exit 1; }
+
+      - name: Run the cell
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          SMOKE: ${{ inputs.smoke && '--smoke' || '' }}
+        run: |
+          # Sample memory and disk every 10 s so that a run killed or slowed by the runner's limits can
+          # be told apart from one the agent ended. Samples also go to the job log once a minute,
+          # because a runner that runs out of memory shuts down before the artifact is uploaded.
+          ( n=0; while sleep 10; do
+              line="$(date -u +%H:%M:%S) ram_mb=$(free -m | awk '/Mem:/{print $3}') swap_mb=$(free -m | awk '/Swap:/{print $3}') disk_free_gb=$(df -BG --output=avail / | tail -1 | tr -dc 0-9)"
+              echo "$line" >> "$AFS_SWEEP_DIR/memory.log"
+              n=$((n + 1)); [ $((n % 6)) -eq 0 ] && echo "resources: $line"
+            done ) &
+          python3 "$RUNNER_TEMP/harness/sweep.py" --lanes "$LANE" --problems "$PROBLEM" --rep "$REP" --par 1 $SMOKE
+          status=$?
+          echo "peak RAM sample: $(sort -t= -k2 -n "$AFS_SWEEP_DIR/memory.log" | tail -1)"
+          exit $status
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.lane }}-${{ matrix.cell.problem }}-${{ matrix.cell.rep }}
+          path: |
+            ${{ env.AFS_SWEEP_DIR }}
+            !${{ env.AFS_SWEEP_DIR }}/.private/**/venv/**
+            !${{ env.AFS_SWEEP_DIR }}/.private/**/home/**
+            !${{ env.AFS_SWEEP_DIR }}/**/*_cache/**
+            !${{ env.AFS_SWEEP_DIR }}/**/*.nwb
+          include-hidden-files: true
+          retention-days: 90
+          if-no-files-found: ignore

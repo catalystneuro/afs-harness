@@ -1,0 +1,19 @@
+# Skills bundled with the pinned CLI, as reported in the init event of a smoke test with an
+# empty config directory (CLI 2.1.282, 2026-09-24). Regenerate this file whenever AFS_CLI_VERSION changes.
+# cli_version: 2.1.282
+deep-research
+dataviz
+update-config
+verify
+debug
+code-review
+simplify
+batch
+fewer-permission-prompts
+doctor
+loop
+schedule
+claude-api
+workflow-authoring
+run
+run-skill-generator

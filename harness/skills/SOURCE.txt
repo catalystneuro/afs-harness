@@ -1,0 +1,3 @@
+source: https://github.com/catalystneuro/claude-skills
+commit: 827ee8aa8ee96c45ad26d54210e2f89d4a0eb691
+note: using-pynapple/references/transform_coords.py was untracked in the source checkout when vendored (2026-09-24)

@@ -1,0 +1,10 @@
+# lane	model	base_url	budget_usd
+# base_url empty = Anthropic API. budget_usd is a runaway guard set high enough not to bind;
+# runs that end at the cap are reported, not excluded. Open-weights lanes go through an
+# Anthropic-compatible proxy, and Claude Code cannot price them, so their cap is not comparable.
+opus-5-5	claude-opus-5-5		60
+opus-5	claude-opus-5		60
+opus-4-8	claude-opus-4-8		60
+sonnet-5	claude-sonnet-5		60
+haiku-4-5	claude-haiku-4-5		60
+kimi-k3	moonshotai/kimi-k3	http://127.0.0.1:8789	500
