@@ -7,7 +7,8 @@ MCP server, an auto-memory path, or a project agent.
 
 Outcome classes:
   success               the session ended with a successful result event
-  infra_error           empty transcript, API error, overload, or rate limit; eligible for retry
+  infra_error           empty transcript, API error, overload, rate or usage limit, or a session that
+                        ended while retrying a failed API call; eligible for retry
   agent_ended           any other ending (budget cap, max turns, error during execution);
                         kept and scored, never retried
   isolation_violation   the environment was not what was declared; the attempt is invalid
@@ -21,7 +22,30 @@ from pathlib import Path
 
 EXPECTED_SKILLS = {"analyzing-dandi-datasets", "using-nemos", "using-pynapple"}
 INFRA_MARKERS = ("overloaded", "rate_limit", "rate limit", "api_error", "529", "503", "502",
-                 "ECONNRESET", "socket hang up", "issue with the selected model")
+                 "ECONNRESET", "socket hang up", "issue with the selected model",
+                 "usage limit", "limit reached", "hit your limit")
+
+
+def ended_on_api_retry(events):
+    """True when the last event before the result is a failed API call that Claude Code was
+    retrying, which is how a session ends when the subscription's usage limit or a rate limit
+    runs out mid-run, whatever the wording of the final error."""
+    before_result = [e for e in events if e.get("type") != "result"]
+    return bool(before_result) and before_result[-1].get("type") == "system" and \
+        before_result[-1].get("subtype") == "api_retry"
+
+
+def classify(events, init, result, stderr):
+    result_text = str(result.get("result") or "")
+    if not events or not init:
+        return "infra_error", "empty transcript"
+    if result.get("subtype") == "success" and not result.get("is_error"):
+        return "success", f"{result.get('num_turns')} turns"
+    if any(m.lower() in (stderr + result_text).lower() for m in INFRA_MARKERS) or result.get("subtype") is None:
+        return "infra_error", (result_text or stderr)[-200:].replace("\n", " ")
+    if ended_on_api_retry(events):
+        return "infra_error", "ended while retrying a failed API call: " + result_text[-150:].replace("\n", " ")
+    return "agent_ended", str(result.get("subtype"))
 
 
 def tree_hash(path):
@@ -107,17 +131,10 @@ def main():
         sorted(k for k, v in usage.items() if (v or {}).get("outputTokens", 0) > 0)
 
     stderr = (work / "stderr.log").read_text(errors="replace") if (work / "stderr.log").exists() else ""
-    result_text = str(result.get("result") or "")
     if violations:
         status, detail = "isolation_violation", "; ".join(violations)
-    elif not events or not init:
-        status, detail = "infra_error", "empty transcript"
-    elif result.get("subtype") == "success" and not result.get("is_error"):
-        status, detail = "success", f"{result.get('num_turns')} turns"
-    elif any(m.lower() in (stderr + result_text).lower() for m in INFRA_MARKERS) or result.get("subtype") is None:
-        status, detail = "infra_error", (result_text or stderr)[-200:].replace("\n", " ")
     else:
-        status, detail = "agent_ended", str(result.get("subtype"))
+        status, detail = classify(events, init, result, stderr)
     if study_repo_hits:
         detail += f"; accessed this study's repository in {study_repo_hits} tool calls"
     if fallbacks:

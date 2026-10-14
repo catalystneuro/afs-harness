@@ -18,6 +18,7 @@ The output contract in `SYSTEM_ADDENDUM.md` differs from the exploratory one in 
 | `write_settings.sh` | Writes each attempt's settings file, used by `run_clean.sh` and the workflow's preflight. |
 | `clean_placeholders.sh` | Removes the empty placeholder files (`.env`, `package.json`, `yarn.lock`, and so on) that Claude Code's sandbox leaves in the working directory. `test_clean_placeholders.sh` tests it. |
 | `provenance.py` | Writes `provenance.json` (versions, hashes of the addendum, skills, and lockfile, the init event, the result), checks isolation from the init event, and classifies the outcome. |
+| `test_provenance.py` | Tests how `provenance.py` classifies outcomes, including a session cut off by a usage limit. |
 | `sweep.py` | Shuffles all cells with a fixed seed, runs them in a pool, and retries only infrastructure errors, identically for every lane. Logs every attempt. |
 | `reexecute.py` | Checks README numbers against the run's outputs, or re-executes the main script in a scratch copy (`--source notebook` or `clean`). `--corrupt` is the deliberate-corruption self-test. |
 | `lanes.tsv`, `problems.tsv` | Models and prompts. |
