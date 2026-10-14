@@ -5,6 +5,8 @@
 opus-5-5	claude-opus-5-5		60
 opus-5	claude-opus-5		60
 opus-4-8	claude-opus-4-8		60
+sonnet-5-5	claude-sonnet-5-5		60
 sonnet-5	claude-sonnet-5		60
+haiku-5-5	claude-haiku-5-5		60
 haiku-4-5	claude-haiku-4-5		60
 kimi-k3	moonshotai/kimi-k3	http://127.0.0.1:8789	500
