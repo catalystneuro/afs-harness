@@ -20,3 +20,4 @@ workflow-authoring
 run
 run-skill-generator
 plugin-authoring
+schedule
