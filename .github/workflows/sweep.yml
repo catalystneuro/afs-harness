@@ -42,6 +42,11 @@ on:
       seed:
         description: "Seed for the order of cells"
         default: "1"
+      account:
+        description: "Subscription: main uses CLAUDE_CODE_OAUTH_TOKEN, personal uses CLAUDE_CODE_OAUTH_TOKEN_PERSONAL"
+        type: choice
+        options: [main, personal]
+        default: main
 
 permissions:
   contents: read
@@ -95,7 +100,7 @@ jobs:
       max-parallel: ${{ fromJSON(inputs.max_parallel) }}
       matrix:
         cell: ${{ fromJSON(needs.plan.outputs.cells) }}
-    name: ${{ inputs.lane }} ${{ matrix.cell.problem }} ${{ matrix.cell.rep }}
+    name: ${{ inputs.lane }} ${{ matrix.cell.problem }} ${{ matrix.cell.rep }} (${{ inputs.account }})
     env:
       LANE: ${{ inputs.lane }}
       PROBLEM: ${{ matrix.cell.problem }}
@@ -134,9 +139,11 @@ jobs:
 
       - name: Check the token, the permission mode, the agent's shell, and its Python
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.account == 'personal' && secrets.CLAUDE_CODE_OAUTH_TOKEN_PERSONAL || inputs.account == 'main' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
         run: |
           set +e -uo pipefail
+          # Empty when the chosen account's secret is not set; the expression never falls back to the other one.
+          [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || { echo "::error::No token for account ${{ inputs.account }}; set its secret"; exit 1; }
           h="$RUNNER_TEMP/harness"; pre="$RUNNER_TEMP/preflight"; mkdir -p "$pre/work" "$pre/home"
           bash "$h/write_settings.sh" "$pre/config"
           uv venv -q --python python3.12 "$pre/venv" && VIRTUAL_ENV="$pre/venv" uv pip install -q -r "$h/requirements.lock"
@@ -167,7 +174,7 @@ jobs:
 
       - name: Run the cell
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.account == 'personal' && secrets.CLAUDE_CODE_OAUTH_TOKEN_PERSONAL || inputs.account == 'main' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           SMOKE: ${{ inputs.smoke && '--smoke' || '' }}
         run: |
           # Sample memory and disk every 10 s so that a run killed or slowed by the runner's limits can

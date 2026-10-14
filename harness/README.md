@@ -48,6 +48,8 @@ gh workflow run sweep.yml -f lane=opus-5-5-high -f problems=placefields -f reps=
 gh run download <run-id> -D ~/afs-sweeps/confirmatory-2026-10
 ```
 
+Runs use the subscription in the `CLAUDE_CODE_OAUTH_TOKEN` secret. With `-f account=personal` they use `CLAUDE_CODE_OAUTH_TOKEN_PERSONAL` instead, so that lanes can be split across two subscriptions; the account appears in each job's name.
+
 Open-weights lanes need a proxy, which the workflow does not start, so they still run locally.
 
 ## Known Gaps
