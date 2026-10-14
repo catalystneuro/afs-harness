@@ -62,7 +62,7 @@ priv="$sweep/.private/$kind/$lane/$problem-$rep/attempt-$attempt"   # config, ho
 mkdir -p "$work" "$priv/config/skills" "$priv/home"
 
 cp -R "$HARNESS/skills/analyzing-dandi-datasets" "$HARNESS/skills/using-nemos" "$HARNESS/skills/using-pynapple" "$priv/config/skills/"
-bash "$HARNESS/write_settings.sh" "$priv/config" "$priv/home" "$priv/venv"
+bash "$HARNESS/write_settings.sh" "$priv/config"
 
 py="${AFS_PYTHON:-python3.12}"
 uv venv -q --python "$py" "$priv/venv" >/dev/null 2>&1 || fail "venv creation failed"
@@ -71,6 +71,7 @@ VIRTUAL_ENV="$priv/venv" uv pip install -q -r "$HARNESS/requirements.lock" >/dev
 # ---- environment for the agent ----------------------------------------------------------
 env_vars=(
   "HOME=$priv/home"
+  "JUPYTER_DATA_DIR=$priv/home/jupyter-data"
   "CLAUDE_CONFIG_DIR=$priv/config"
   "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"
   "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1"
@@ -93,12 +94,18 @@ addendum="$(cat "$HARNESS/SYSTEM_ADDENDUM.md")"
 # so this list and --permission-prompts none decide what runs: any other tool is refused. That
 # leaves out the tools that only make sense with a human watching or that schedule work past the
 # session (Monitor, ScheduleWakeup, cron, worktrees).
+# The sandbox lets commands write only to the working directory, a temp directory, and directories
+# passed with --add-dir, so the agent's home and venv are added; otherwise `pip install` and
+# Jupyter fail with a read-only file system. Even then the sandbox keeps some paths in the home
+# directory read-only, ~/.local among them, so JUPYTER_DATA_DIR moves Jupyter's data out of
+# ~/.local/share. (The sandbox drops XDG_DATA_HOME, so that variable cannot do it.)
 allowed="Bash,Read,Write,Edit,Glob,Grep,NotebookEdit,WebFetch,WebSearch,Skill,Agent,TodoWrite"
 
 start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ( cd "$work" && env -i "${env_vars[@]}" claude -p "${prompt}${suffix}" \
     --model "$model" \
     --permission-prompts none --allowedTools "$allowed" \
+    --add-dir "$priv/home" "$priv/venv" \
     --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
     --setting-sources user \
     --append-system-prompt "$addendum" \
