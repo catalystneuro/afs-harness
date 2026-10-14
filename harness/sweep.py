@@ -10,8 +10,8 @@ stops the sweep, since it means the environment is wrong for every cell.
 Every attempt is logged to <sweep>/attempts.tsv, and the plan to <sweep>/plan.tsv.
 
 Usage:
-    python harness/sweep.py --lanes opus-5 sonnet-5 --problems all --reps 5 --par 4 --seed 1
-    python harness/sweep.py --smoke --lanes opus-5-5 haiku-5-5    # isolation check, one cheap call per lane
+    python harness/sweep.py --lanes opus-5-5-high haiku-5-5-high --problems all --reps 5 --par 4 --seed 1
+    python harness/sweep.py --smoke --lanes opus-5-5-high haiku-5-5-low    # isolation check, one cheap call per lane
 Requires AFS_SWEEP_DIR, AFS_CLI_VERSION, and credentials in the environment (see run_clean.sh).
 """
 

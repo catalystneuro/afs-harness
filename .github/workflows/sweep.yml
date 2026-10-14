@@ -2,7 +2,7 @@ name: Benchmark sweep
 
 # Runs benchmark cells (lane, problem, rep) through harness/run_clean.sh, one cell per job on a
 # fresh runner. Started by hand from the Actions tab or with
-#   gh workflow run sweep.yml -f lane=opus-5-5 -f problems=placefields -f reps=1
+#   gh workflow run sweep.yml -f lane=opus-5-5-high -f problems=placefields -f reps=1
 #
 # This repository holds only the harness, and is public so that jobs get the 16 GB standard
 # runners; the private-repository runners (8 GB) ran out of memory on the ring-attractor problem.

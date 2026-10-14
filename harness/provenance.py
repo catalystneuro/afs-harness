@@ -54,7 +54,7 @@ def read_events(path):
 def main():
     ap = argparse.ArgumentParser()
     for k in ("work", "priv", "harness", "lane", "model", "problem", "rep", "attempt", "cli",
-              "start", "end", "exit-code", "budget"):
+              "start", "end", "exit-code", "budget", "effort"):
         ap.add_argument(f"--{k}", required=True)
     a = ap.parse_args()
     work, priv, harness = Path(a.work), Path(a.priv), Path(a.harness)
@@ -131,11 +131,12 @@ def main():
         "start_utc": a.start, "end_utc": a.end, "exit_code": int(a.exit_code),
         "status": status, "detail": detail, "isolation_violations": violations,
         "study_repo_tool_calls": study_repo_hits,
-        "cli_version": a.cli, "budget_usd": float(a.budget),
+        "cli_version": a.cli, "budget_usd": float(a.budget), "effort": a.effort,
         "result": {k: result.get(k) for k in ("subtype", "is_error", "num_turns", "duration_ms",
                                               "total_cost_usd", "stop_reason", "usage")},
         "init": {k: init.get(k) for k in ("model", "claude_code_version", "cwd", "tools", "skills",
-                                          "mcp_servers", "agents", "plugins", "memory_paths", "permissionMode")},
+                                          "mcp_servers", "agents", "plugins", "memory_paths", "permissionMode",
+                                          "per_turn_effort_active")},
         "hashes": {
             "system_addendum": file_hash(harness / "SYSTEM_ADDENDUM.md"),
             "autonomy_suffix": file_hash(harness / "autonomy_suffix.txt"),
