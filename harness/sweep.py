@@ -101,6 +101,9 @@ def main():
     print(f"done: {counts}")
     if stop.is_set():
         sys.exit("stopped early: an isolation violation or harness error needs attention before continuing")
+    if counts.get("infra_error_exhausted"):
+        # Usually a spent usage limit. Exit non-zero so the cell shows as failed and gets relaunched.
+        sys.exit(f"{counts['infra_error_exhausted']} cell(s) ran out of retries on infrastructure errors; relaunch them")
 
 
 if __name__ == "__main__":
