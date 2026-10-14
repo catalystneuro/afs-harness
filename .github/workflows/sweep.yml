@@ -166,7 +166,7 @@ jobs:
           echo "permission mode: $mode; command output: $out"
           tail -c 1000 "$pre/preflight.err"
           case "$result" in
-            *"Failed to authenticate"*) echo "::error::The CLAUDE_CODE_OAUTH_TOKEN secret did not authenticate: $result"; exit 1;;
+            *"Failed to authenticate"*) echo "::error::The token for account ${{ inputs.account }} did not authenticate: $result"; exit 1;;
           esac
           [[ "$out" == *shell-ok* ]] || { echo "::error::The agent's shell, Python stack, or a write to the cache, home, or venv failed: $out $result"; exit 1; }
           [[ "$out" =~ (^|$'\n')0:shell-ok ]] || { echo "::error::The token is visible to the agent's commands"; exit 1; }
