@@ -15,7 +15,7 @@
 # Usage: run_clean.sh <lane> <problem> <rep>
 # Required environment:
 #   AFS_SWEEP_DIR      root of this sweep, e.g. ~/afs-sweeps/confirmatory-2026-10
-#   AFS_CLI_VERSION    the pinned Claude Code version, e.g. 2.1.282; the run refuses otherwise
+#   AFS_CLI_VERSION    the pinned Claude Code version, e.g. 2.1.296; the run refuses otherwise
 #   CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) or ANTHROPIC_API_KEY, for Anthropic lanes
 #   OPENROUTER_API_KEY and a running proxy, for open-weights lanes (see lanes.tsv)
 # Optional:
@@ -41,6 +41,8 @@ d="$sweep"; while [ "$d" != "/" ]; do [ -e "$d/CLAUDE.md" ] && fail "found $d/CL
 row="$(awk -F'\t' -v k="$lane" '$1==k' "$HARNESS/lanes.tsv")"
 [ -n "$row" ] || fail "unknown lane $lane"
 model="$(cut -f2 <<<"$row")"; base_url="$(cut -f3 <<<"$row")"; budget="$(cut -f4 <<<"$row")"
+effort="$(cut -f5 <<<"$row")"
+[ -n "$effort" ] || fail "lane $lane has no effort level"
 prompt="$(awk -F'\t' -v k="$problem" '$1==k{print $2}' "$HARNESS/problems.tsv")"
 [ -n "$prompt" ] || fail "unknown problem $problem"
 kind=runs
@@ -103,7 +105,7 @@ allowed="Bash,Read,Write,Edit,Glob,Grep,NotebookEdit,WebFetch,WebSearch,Skill,Ag
 
 start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ( cd "$work" && env -i "${env_vars[@]}" claude -p "${prompt}${suffix}" \
-    --model "$model" \
+    --model "$model" --effort "$effort" \
     --permission-prompts none --allowedTools "$allowed" \
     --add-dir "$priv/home" "$priv/venv" \
     --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
@@ -121,4 +123,4 @@ VIRTUAL_ENV="$priv/venv" uv pip freeze > "$priv/pip-freeze.txt" 2>/dev/null
 python3 "$HARNESS/provenance.py" \
   --work "$work" --priv "$priv" --harness "$HARNESS" \
   --lane "$lane" --model "$model" --problem "$problem" --rep "$rep" --attempt "$attempt" \
-  --cli "$v" --start "$start" --end "$end" --exit-code "$code" --budget "$budget"
+  --cli "$v" --start "$start" --end "$end" --exit-code "$code" --budget "$budget" --effort "$effort"

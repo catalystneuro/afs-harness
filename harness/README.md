@@ -31,20 +31,20 @@ Credentials come from the environment, not the keychain, because each attempt ha
 
 ```bash
 export AFS_SWEEP_DIR=~/afs-sweeps/confirmatory-2026-10
-export AFS_CLI_VERSION=2.1.282          # refuse to run on any other version
+export AFS_CLI_VERSION=2.1.296          # refuse to run on any other version
 export CLAUDE_CODE_OAUTH_TOKEN=...      # from `claude setup-token`
 
 # Isolation smoke test: one cheap call per lane, fails loudly on any violation
-python harness/sweep.py --smoke --lanes opus-5-5 opus-5 sonnet-5-5 haiku-5-5
+python harness/sweep.py --smoke --lanes opus-5-5-low opus-5-5-high haiku-5-5-low haiku-5-5-high
 
 # Full sweep
-python harness/sweep.py --lanes opus-5-5 opus-5 sonnet-5-5 haiku-5-5 --problems all --reps 5 --par 4 --seed 1
+python harness/sweep.py --lanes opus-5-5-low opus-5-5-high haiku-5-5-low haiku-5-5-high --problems all --reps 5 --par 4 --seed 1
 ```
 
 Confirmatory sweeps run in GitHub Actions through `.github/workflows/sweep.yml`, one cell per job on a fresh runner, with the repository checkout deleted before the agent starts. The workflow reads the token from the `CLAUDE_CODE_OAUTH_TOKEN` secret and runs a one-turn preflight before each cell. The token is stripped from the agent's commands, which run in Claude Code's sandbox (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`). That sandbox forces permission mode `default`, so `run_clean.sh` lists the allowed tools explicitly, and `provenance.py` treats any other permission mode as an isolation violation.
 
 ```bash
-gh workflow run sweep.yml -f lane=opus-5-5 -f problems=placefields -f reps=1
+gh workflow run sweep.yml -f lane=opus-5-5-high -f problems=placefields -f reps=1
 gh run download <run-id> -D ~/afs-sweeps/confirmatory-2026-10
 ```
 
