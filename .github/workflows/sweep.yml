@@ -55,6 +55,9 @@ env:
   AFS_CLI_VERSION: 2.1.296
   # Outside the checkout and outside any git repository.
   AFS_SWEEP_DIR: /home/runner/sweep
+  # Memory for the agent and everything it starts; see "Run the cell".
+  AFS_MEMORY_MAX: 14G
+  AFS_SWAP_MAX: 2G
 
 jobs:
   plan:
@@ -177,6 +180,15 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.account == 'personal' && secrets.CLAUDE_CODE_OAUTH_TOKEN_PERSONAL || inputs.account == 'main' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           SMOKE: ${{ inputs.smoke && '--smoke' || '' }}
         run: |
+          # Run the cell in a cgroup capped below the runner's 16 GB, so that an analysis that runs out
+          # of memory has its own process killed (the agent sees "Killed" and the run is scored) instead
+          # of taking down the runner, which loses the whole run. The rest is left for the runner.
+          sudo mkdir -p /sys/fs/cgroup/agent
+          echo "$AFS_MEMORY_MAX" | sudo tee /sys/fs/cgroup/agent/memory.max >/dev/null
+          echo "$AFS_SWAP_MAX" | sudo tee /sys/fs/cgroup/agent/memory.swap.max >/dev/null
+          echo $$ | sudo tee /sys/fs/cgroup/agent/cgroup.procs >/dev/null
+          echo "memory cap: $(cat /sys/fs/cgroup/agent/memory.max) bytes, swap $(cat /sys/fs/cgroup/agent/memory.swap.max); this shell is in $(cut -d: -f3 /proc/self/cgroup)"
+          [ "$(cut -d: -f3 /proc/self/cgroup)" = /agent ] || { echo "::error::Could not move the cell into the capped cgroup"; exit 1; }
           # Sample memory and disk every 10 s so that a run killed or slowed by the runner's limits can
           # be told apart from one the agent ended. Samples also go to the job log once a minute,
           # because a runner that runs out of memory shuts down before the artifact is uploaded.

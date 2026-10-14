@@ -103,6 +103,12 @@ addendum="$(cat "$HARNESS/SYSTEM_ADDENDUM.md")"
 # ~/.local/share. (The sandbox drops XDG_DATA_HOME, so that variable cannot do it.)
 allowed="Bash,Read,Write,Edit,Glob,Grep,NotebookEdit,WebFetch,WebSearch,Skill,Agent,TodoWrite"
 
+# The memory cap of the cgroup this attempt runs in (set by the workflow; "none" without cgroup v2),
+# and its count of OOM kills before the agent starts, so the attempt's own kills can be counted.
+cg="/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup 2>/dev/null)"
+mem_max="$(cat "$cg/memory.max" 2>/dev/null || echo none)"
+oom_kills() { awk '$1=="oom_kill"{print $2}' "$cg/memory.events" 2>/dev/null || echo 0; }
+oom_before="$(oom_kills)"
 start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ( cd "$work" && env -i "${env_vars[@]}" claude -p "${prompt}${suffix}" \
     --model "$model" --effort "$effort" \
@@ -111,16 +117,18 @@ start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
     --setting-sources user \
     --append-system-prompt "$addendum" \
-    --output-format stream-json --verbose \
+    --output-format stream-json --verbose --forward-subagent-text \
     --max-budget-usd "$budget" \
     > transcript.jsonl 2> stderr.log )
 code=$?
 end="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # ---- provenance and outcome -------------------------------------------------------------
+oom_after="$(oom_kills)"
 bash "$HARNESS/clean_placeholders.sh" "$work"
 VIRTUAL_ENV="$priv/venv" uv pip freeze > "$priv/pip-freeze.txt" 2>/dev/null
 python3 "$HARNESS/provenance.py" \
   --work "$work" --priv "$priv" --harness "$HARNESS" \
   --lane "$lane" --model "$model" --problem "$problem" --rep "$rep" --attempt "$attempt" \
-  --cli "$v" --start "$start" --end "$end" --exit-code "$code" --budget "$budget" --effort "$effort"
+  --cli "$v" --start "$start" --end "$end" --exit-code "$code" --budget "$budget" --effort "$effort" \
+  --memory-max "$mem_max" --oom-kills "$(( ${oom_after:-0} - ${oom_before:-0} ))"
