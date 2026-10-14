@@ -20,6 +20,7 @@ The output contract in `SYSTEM_ADDENDUM.md` differs from the exploratory one in 
 | `provenance.py` | Writes `provenance.json` (versions, hashes of the addendum, skills, and lockfile, the init event, the result), checks isolation from the init event, and classifies the outcome. |
 | `test_provenance.py` | Tests how `provenance.py` classifies outcomes, including a session cut off by a usage limit. |
 | `sweep.py` | Shuffles all cells with a fixed seed, runs them in a pool, and retries only infrastructure errors, identically for every lane. Logs every attempt. |
+| `.github/workflows/reexecute.yml` | Re-executes every cell of a sweep run from a clean copy in GitHub Actions, in the attempt's own rebuilt environment and under the sweep's memory cap, and uploads the claim check per cell. |
 | `reexecute.py` | Checks README numbers against the run's outputs, or re-executes the main script in a scratch copy (`--source notebook` or `clean`). `--corrupt` is the deliberate-corruption self-test. |
 | `lanes.tsv`, `problems.tsv` | Models and prompts. |
 | `SYSTEM_ADDENDUM.md`, `autonomy_suffix.txt` | What every agent is told, apart from the one-sentence prompt. |

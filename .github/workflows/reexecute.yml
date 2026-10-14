@@ -1,0 +1,155 @@
+name: Re-execute runs
+
+# Re-executes the cells of a finished (or partly finished) sweep run from a clean copy, and checks
+# the README's numbers against the fresh outputs (harness/reexecute.py --source clean). Started by
+# hand from the Actions tab or with
+#   gh workflow run reexecute.yml -f sweep_run=<run id of a sweep.yml run>
+#
+# Each job downloads one cell's artifact from the sweep run, rebuilds the attempt's Python
+# environment from its own pip freeze (so packages the agent installed are there), and runs the
+# main jupytext script with generated files and caches removed, under the same memory cap as the
+# sweep. No agent runs here and no Claude token is in the environment. Results are uploaded as one
+# artifact per cell, named reexec-<cell>, holding the claim check and the regenerated notebook and
+# figures.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sweep_run:
+        description: "Run id of the sweep.yml run whose cells to re-execute"
+        required: true
+      cells:
+        description: "Space-separated artifact names (e.g. opus-5-5-high-placefields-3), or all"
+        default: all
+      timeout:
+        description: "Seconds allowed for one script"
+        default: "3600"
+      max_parallel:
+        description: "Jobs at once"
+        default: "8"
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  AFS_MEMORY_MAX: 14G
+  AFS_SWAP_MAX: 2G
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      cells: ${{ steps.plan.outputs.cells }}
+    steps:
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SWEEP_RUN: ${{ inputs.sweep_run }}
+          CELLS: ${{ inputs.cells }}
+        run: |
+          set -euo pipefail
+          [[ "$SWEEP_RUN" =~ ^[0-9]+$ ]] || { echo "::error::Not a run id: $SWEEP_RUN"; exit 1; }
+          names=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$SWEEP_RUN/artifacts?per_page=100" \
+            -q '.artifacts[] | select(.expired | not) | .name' | sort -u)
+          if [ "$CELLS" != all ]; then
+            names=$(comm -12 <(echo "$names") <(tr ' ' '\n' <<<"$CELLS" | sort -u))
+          fi
+          [ -n "$names" ] || { echo "::error::No artifacts to re-execute"; exit 1; }
+          echo "cells=$(jq -R . <<<"$names" | jq -cs .)" >> "$GITHUB_OUTPUT"
+          echo "$(wc -l <<<"$names") cells"
+
+  reexecute:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(inputs.max_parallel) }}
+      matrix:
+        cell: ${{ fromJSON(needs.plan.outputs.cells) }}
+    name: reexec ${{ matrix.cell }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.cell }}
+          run-id: ${{ inputs.sweep_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/cell
+
+      - name: Find the successful attempt and rebuild its environment
+        id: find
+        run: |
+          set -euo pipefail
+          pip install --no-cache-dir -q uv
+          # The cell's last attempt with status success; reruns after infrastructure errors leave
+          # earlier attempts beside it.
+          read -r work freeze < <(python3 - "$RUNNER_TEMP/cell" <<'EOF'
+          import json, sys
+          from pathlib import Path
+          root = Path(sys.argv[1])
+          ok = []
+          for p in root.glob("runs/*/*/attempt-*/provenance.json"):
+              prov = json.loads(p.read_text())
+              if prov["status"] == "success":
+                  ok.append((int(prov["attempt"]), p.parent))
+          if not ok:
+              print("none none"); sys.exit()
+          _, work = max(ok)
+          rel = work.relative_to(root / "runs")
+          print(work, root / ".private" / "runs" / rel / "pip-freeze.txt")
+          EOF
+          )
+          echo "work=$work" >> "$GITHUB_OUTPUT"
+          if [ "$work" = none ]; then echo "No successful attempt in this cell; nothing to re-execute"; exit 0; fi
+          [ -s "$freeze" ] || { echo "::error::No pip freeze for $work"; exit 1; }
+          uv venv -q --python python3.12 "$RUNNER_TEMP/venv"
+          VIRTUAL_ENV="$RUNNER_TEMP/venv" uv pip install -q -r "$freeze"
+          echo "work: $work"; echo "packages: $(wc -l < "$freeze")"
+
+      - name: Re-execute from a clean copy
+        if: steps.find.outputs.work != 'none'
+        env:
+          WORK: ${{ steps.find.outputs.work }}
+          TIMEOUT: ${{ inputs.timeout }}
+          CELL: ${{ matrix.cell }}
+        run: |
+          set -uo pipefail
+          # The same memory cap as the sweep, so a script that ran within it there can run here.
+          sudo mkdir -p /sys/fs/cgroup/agent
+          echo "$AFS_MEMORY_MAX" | sudo tee /sys/fs/cgroup/agent/memory.max >/dev/null
+          echo "$AFS_SWAP_MAX" | sudo tee /sys/fs/cgroup/agent/memory.swap.max >/dev/null
+          echo $$ | sudo tee /sys/fs/cgroup/agent/cgroup.procs >/dev/null
+          [ "$(cut -d: -f3 /proc/self/cgroup)" = /agent ] || { echo "::error::Could not move into the capped cgroup"; exit 1; }
+          out="$RUNNER_TEMP/out"; mkdir -p "$out"
+          python3 harness/reexecute.py "$WORK" --source clean --python "$RUNNER_TEMP/venv/bin/python" \
+            --timeout "$TIMEOUT" --out "$out/$CELL.claimcheck.json" --quiet
+          python3 - "$out/$CELL.claimcheck.json" <<'EOF'
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          print(f"execution={d['execution']} claims={d['n_claims']} backed={d['backed_fraction']} unbacked={d['n_unbacked']}")
+          EOF
+          # Keep the regenerated notebook and figures, for checking what the clean run produced.
+          scratch=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['detail'].split('scratch at ')[-1] if 'scratch at ' in d['detail'] else '')" "$out/$CELL.claimcheck.json")
+          if [ -n "$scratch" ] && [ -d "$scratch" ]; then
+            mkdir -p "$out/regenerated"
+            (cd "$scratch" && find . -type f \( -name '*.ipynb' -o -name '*.png' -o -name 'results.json' \) -size -20M \
+              -exec cp --parents {} "$out/regenerated/" \;)
+          fi
+          echo "oom_kills=$(awk '$1=="oom_kill"{print $2}' /sys/fs/cgroup/agent/memory.events)" | tee "$out/memory.txt"
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.find.outputs.work != 'none'
+        with:
+          name: reexec-${{ matrix.cell }}
+          path: ${{ runner.temp }}/out
+          retention-days: 90
+          if-no-files-found: ignore
