@@ -15,6 +15,7 @@ The output contract in `SYSTEM_ADDENDUM.md` differs from the exploratory one in 
 | File | Purpose |
 |---|---|
 | `run_clean.sh` | Runs one attempt of one cell with the isolation above, then calls `provenance.py`. |
+| `write_settings.sh` | Writes each attempt's settings file, used by `run_clean.sh` and the workflow's preflight. It opens the agent's home directory and Python environment for writing inside the sandbox. |
 | `clean_placeholders.sh` | Removes the empty placeholder files (`.env`, `package.json`, `yarn.lock`, and so on) that Claude Code's sandbox leaves in the working directory. `test_clean_placeholders.sh` tests it. |
 | `provenance.py` | Writes `provenance.json` (versions, hashes of the addendum, skills, and lockfile, the init event, the result), checks isolation from the init event, and classifies the outcome. |
 | `sweep.py` | Shuffles all cells with a fixed seed, runs them in a pool, and retries only infrastructure errors, identically for every lane. Logs every attempt. |

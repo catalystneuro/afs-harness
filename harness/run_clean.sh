@@ -62,13 +62,7 @@ priv="$sweep/.private/$kind/$lane/$problem-$rep/attempt-$attempt"   # config, ho
 mkdir -p "$work" "$priv/config/skills" "$priv/home"
 
 cp -R "$HARNESS/skills/analyzing-dandi-datasets" "$HARNESS/skills/using-nemos" "$HARNESS/skills/using-pynapple" "$priv/config/skills/"
-cat > "$priv/config/settings.json" <<'JSON'
-{
-  "autoMemoryEnabled": false,
-  "disableClaudeAiConnectors": true,
-  "includeCoAuthoredBy": false
-}
-JSON
+bash "$HARNESS/write_settings.sh" "$priv/config" "$priv/home" "$priv/venv"
 
 py="${AFS_PYTHON:-python3.12}"
 uv venv -q --python "$py" "$priv/venv" >/dev/null 2>&1 || fail "venv creation failed"
