@@ -71,6 +71,8 @@ VIRTUAL_ENV="$priv/venv" uv pip install -q -r "$HARNESS/requirements.lock" >/dev
 # ---- environment for the agent ----------------------------------------------------------
 env_vars=(
   "HOME=$priv/home"
+  "XDG_DATA_HOME=$priv/home/xdg/data"
+  "XDG_STATE_HOME=$priv/home/xdg/state"
   "CLAUDE_CONFIG_DIR=$priv/config"
   "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"
   "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1"
@@ -95,7 +97,9 @@ addendum="$(cat "$HARNESS/SYSTEM_ADDENDUM.md")"
 # session (Monitor, ScheduleWakeup, cron, worktrees).
 # The sandbox lets commands write only to the working directory, a temp directory, and directories
 # passed with --add-dir, so the agent's home and venv are added; otherwise `pip install` and
-# Jupyter fail with a read-only file system.
+# Jupyter fail with a read-only file system. Even then the sandbox keeps some paths in the home
+# directory read-only, ~/.local among them, so XDG_DATA_HOME and XDG_STATE_HOME (where Jupyter
+# keeps its data) point elsewhere in the home directory.
 allowed="Bash,Read,Write,Edit,Glob,Grep,NotebookEdit,WebFetch,WebSearch,Skill,Agent,TodoWrite"
 
 start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

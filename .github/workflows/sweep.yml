@@ -145,22 +145,24 @@ jobs:
           # length of the token as its commands see it (0 when scrubbed), imports the analysis stack,
           # and writes to the remfile cache directory, its home directory, and its Python environment.
           cd "$pre/work"
-          env -i HOME="$pre/home" CLAUDE_CONFIG_DIR="$pre/config" CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 \
+          env -i HOME="$pre/home" XDG_DATA_HOME="$pre/home/xdg/data" XDG_STATE_HOME="$pre/home/xdg/state" CLAUDE_CONFIG_DIR="$pre/config" CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 \
             DISABLE_AUTOUPDATER=1 DISABLE_TELEMETRY=1 VIRTUAL_ENV="$pre/venv" \
             PATH="$pre/venv/bin:/usr/local/bin:/usr/bin:/bin:$(dirname "$(command -v claude)")" \
-            claude -p 'Use the Bash tool to run exactly this command: printf "%s:" "$(printenv CLAUDE_CODE_OAUTH_TOKEN | wc -c)"; python -c "import pynapple, pynwb, lindi, remfile" && mkdir -p /tmp/remfile_cache && touch /tmp/remfile_cache/.w && mkdir -p ~/.local/share/jupyter && touch "$VIRTUAL_ENV/.w" && echo shell-ok. Then reply with only the line it printed.' \
+            claude -p 'Use the Bash tool to run exactly this command: printf "%s:" "$(printenv CLAUDE_CODE_OAUTH_TOKEN | wc -c)"; python -c "import pynapple, pynwb, lindi, remfile" && mkdir -p /tmp/remfile_cache && touch /tmp/remfile_cache/.w && mkdir -p "$(jupyter --data-dir)" && touch "$VIRTUAL_ENV/.w" && echo shell-ok. Then reply with only the line it printed.' \
             --model "$model" --max-turns 3 --setting-sources user --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
             --output-format stream-json --verbose --permission-prompts none --allowedTools Bash --add-dir "$pre/home" "$pre/venv" \
             > "$pre/preflight.jsonl" 2> "$pre/preflight.err"
           mode=$(jq -r 'select(.type=="system" and .subtype=="init") | .permissionMode' "$pre/preflight.jsonl")
           result=$(jq -r 'select(.type=="result") | .result' "$pre/preflight.jsonl")
-          echo "permission mode: $mode; reply: $result"
+          # The command's own output, from the transcript; the model's reply can paraphrase it.
+          out=$(jq -r 'select(.type=="user") | .message.content[]? | select(.type=="tool_result") | .content | if type=="string" then . else (map(.text? // "") | join("")) end' "$pre/preflight.jsonl")
+          echo "permission mode: $mode; command output: $out"
           tail -c 1000 "$pre/preflight.err"
           case "$result" in
             *"Failed to authenticate"*) echo "::error::The CLAUDE_CODE_OAUTH_TOKEN secret did not authenticate: $result"; exit 1;;
           esac
-          [[ "$result" == *shell-ok* ]] || { echo "::error::The agent's shell, Python stack, or a write to the cache, home, or venv failed: $result"; exit 1; }
-          [[ "$result" =~ (^|[^0-9])0:shell-ok ]] || { echo "::error::The token is visible to the agent's commands"; exit 1; }
+          [[ "$out" == *shell-ok* ]] || { echo "::error::The agent's shell, Python stack, or a write to the cache, home, or venv failed: $out $result"; exit 1; }
+          [[ "$out" =~ ^0:shell-ok ]] || { echo "::error::The token is visible to the agent's commands"; exit 1; }
           [ "$mode" = default ] || { echo "::error::Claude Code started in permission mode $mode, not default"; exit 1; }
 
       - name: Run the cell
