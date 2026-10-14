@@ -30,7 +30,7 @@ Credentials come from the environment, not the keychain, because each attempt ha
 
 ```bash
 export AFS_SWEEP_DIR=~/afs-sweeps/confirmatory-2026-10
-export AFS_CLI_VERSION=2.1.282          # refuse to run on any other version
+export AFS_CLI_VERSION=2.1.296          # refuse to run on any other version
 export CLAUDE_CODE_OAUTH_TOKEN=...      # from `claude setup-token`
 
 # Isolation smoke test: one cheap call per lane, fails loudly on any violation

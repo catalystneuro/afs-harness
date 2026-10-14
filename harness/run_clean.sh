@@ -15,7 +15,7 @@
 # Usage: run_clean.sh <lane> <problem> <rep>
 # Required environment:
 #   AFS_SWEEP_DIR      root of this sweep, e.g. ~/afs-sweeps/confirmatory-2026-10
-#   AFS_CLI_VERSION    the pinned Claude Code version, e.g. 2.1.282; the run refuses otherwise
+#   AFS_CLI_VERSION    the pinned Claude Code version, e.g. 2.1.296; the run refuses otherwise
 #   CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) or ANTHROPIC_API_KEY, for Anthropic lanes
 #   OPENROUTER_API_KEY and a running proxy, for open-weights lanes (see lanes.tsv)
 # Optional:

@@ -47,7 +47,7 @@ permissions:
   contents: read
 
 env:
-  AFS_CLI_VERSION: 2.1.282
+  AFS_CLI_VERSION: 2.1.296
   # Outside the checkout and outside any git repository.
   AFS_SWEEP_DIR: /home/runner/sweep
 
