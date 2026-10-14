@@ -78,7 +78,7 @@ def read_events(path):
 def main():
     ap = argparse.ArgumentParser()
     for k in ("work", "priv", "harness", "lane", "model", "problem", "rep", "attempt", "cli",
-              "start", "end", "exit-code", "budget", "effort"):
+              "start", "end", "exit-code", "budget", "effort", "memory-max", "oom-kills"):
         ap.add_argument(f"--{k}", required=True)
     a = ap.parse_args()
     work, priv, harness = Path(a.work), Path(a.priv), Path(a.harness)
@@ -139,6 +139,8 @@ def main():
         detail += f"; accessed this study's repository in {study_repo_hits} tool calls"
     if fallbacks:
         detail += f"; model fallback {fallbacks[0].get('original_model')}->{fallbacks[0].get('fallback_model')}"
+    if int(a.oom_kills):
+        detail += f"; {a.oom_kills} process(es) killed at the memory cap"
     if served and a.model not in served:
         detail += f"; served {served}"
 
@@ -149,6 +151,7 @@ def main():
         "status": status, "detail": detail, "isolation_violations": violations,
         "study_repo_tool_calls": study_repo_hits,
         "cli_version": a.cli, "budget_usd": float(a.budget), "effort": a.effort,
+        "memory_max_bytes": a.memory_max, "oom_kills": int(a.oom_kills),
         "result": {k: result.get(k) for k in ("subtype", "is_error", "num_turns", "duration_ms",
                                               "total_cost_usd", "stop_reason", "usage")},
         "init": {k: init.get(k) for k in ("model", "claude_code_version", "cwd", "tools", "skills",
