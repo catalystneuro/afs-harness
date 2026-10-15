@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from datetime import datetime, timezone
 
-from provenance import classify, seconds_until_reset
+from provenance import classify, seconds_until_reset, source_mentions
 
 INIT = {"type": "system", "subtype": "init"}
 ASSISTANT = {"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}}
@@ -43,4 +43,10 @@ noon = datetime(2026, 10, 14, 15, 58, tzinfo=timezone.utc)
 assert seconds_until_reset("resets 4:40pm (UTC)", noon) == 42 * 60
 assert seconds_until_reset("resets 3pm (UTC)", noon) == (23 * 60 + 2) * 60
 assert seconds_until_reset("no reset here", noon) is None
+# Control runs record tool calls that mention the source dandiset; other problems record nothing.
+call = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash",
+        "input": {"command": "curl https://api.dandiarchive.org/api/dandisets/000582/"}}]}}
+assert len(source_mentions([INIT, call], "grid-sandbox-1")) == 1
+assert source_mentions([INIT, call], "grid") == []
+assert source_mentions([INIT, ASSISTANT], "auditory-sandbox-2") == []
 print("ok")
