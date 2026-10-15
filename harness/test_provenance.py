@@ -17,9 +17,9 @@ def result(subtype, is_error, text):
     return {"type": "result", "subtype": subtype, "is_error": is_error, "result": text, "num_turns": 5}
 
 
-def check(events, expected):
+def check(events, expected, exit_code=0):
     res = next((e for e in reversed(events) if e.get("type") == "result"), {})
-    status, _ = classify(events, INIT, res, "")
+    status, _ = classify(events, INIT, res, "", exit_code)
     assert status == expected, f"expected {expected}, got {status} for {res}"
 
 
@@ -33,6 +33,11 @@ check([INIT, ASSISTANT, result("success", True, "You've hit your session limit Â
 check([INIT, RETRY, ASSISTANT, result("success", False, "done")], "success")
 # A session the agent ended, with no failed API call at the end.
 check([INIT, ASSISTANT, result("error_max_budget_usd", True, "Budget exceeded")], "agent_ended")
+# Stopped by the wall-clock limit (timeout exits 124, or 137 after --kill-after): no result event.
+check([INIT, ASSISTANT], "agent_ended", exit_code=124)
+check([INIT, ASSISTANT], "agent_ended", exit_code=137)
+# No result event for any other reason is still an infrastructure error.
+check([INIT, ASSISTANT], "infra_error", exit_code=1)
 # Reset times: later today, and earlier than now (so tomorrow).
 noon = datetime(2026, 10, 14, 15, 58, tzinfo=timezone.utc)
 assert seconds_until_reset("resets 4:40pm (UTC)", noon) == 42 * 60

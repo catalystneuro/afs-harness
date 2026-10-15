@@ -54,10 +54,13 @@ def ended_on_api_retry(events):
         before_result[-1].get("subtype") == "api_retry"
 
 
-def classify(events, init, result, stderr):
+def classify(events, init, result, stderr, exit_code=0):
     result_text = str(result.get("result") or "")
     if not events or not init:
         return "infra_error", "empty transcript"
+    if exit_code in (124, 137) and not result:
+        # Stopped by run_clean.sh's wall-clock limit: the agent was still working.
+        return "agent_ended", "time limit"
     if result.get("subtype") == "success" and not result.get("is_error"):
         return "success", f"{result.get('num_turns')} turns"
     if any(m.lower() in (stderr + result_text).lower() for m in INFRA_MARKERS) or result.get("subtype") is None \
@@ -154,7 +157,7 @@ def main():
     if violations:
         status, detail = "isolation_violation", "; ".join(violations)
     else:
-        status, detail = classify(events, init, result, stderr)
+        status, detail = classify(events, init, result, stderr, int(a.exit_code))
     if study_repo_hits:
         detail += f"; accessed this study's repository in {study_repo_hits} tool calls"
     if fallbacks:
