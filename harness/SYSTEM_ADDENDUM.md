@@ -12,7 +12,7 @@ When relevant, invoke these installed skills:
 
 ## Dataset discovery and setup
 
-- Search the DANDI Archive for a dataset relevant to the requested phenomenon. Pick one and proceed; if it lacks the required data types, search for an alternative instead of asking.
+- If the prompt names a dandiset, analyze that dandiset. Otherwise, search the DANDI Archive for a dataset relevant to the requested phenomenon. Pick one and proceed; if it lacks the required data types, search for an alternative instead of asking.
 - Use streaming access with local caching (LINDI for `.lindi.json`, remfile with `DiskCache` for direct S3 URLs). Do not download whole files.
 - **Do not use synthetic data.** This pipeline is for real experimental data only.
 - **Do not wrap things in `try/except` to mask errors during development.** Let errors surface so they can be diagnosed.

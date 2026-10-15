@@ -54,6 +54,30 @@ def ended_on_api_retry(events):
         before_result[-1].get("subtype") == "api_retry"
 
 
+# The sandbox problems name a dandiset on the DANDI sandbox that holds one session of a public dandiset.
+# Tool calls that mention the public source dandiset are recorded so that a reviewer can check which
+# dandiset the agent analyzed. A mention alone (a comment that credits the source) is common, so these
+# are not scored automatically.
+CONTROL_SOURCES = {"grid-sandbox": "000582", "auditory-sandbox": "000986"}
+
+
+def source_mentions(events, problem):
+    source = next((v for k, v in CONTROL_SOURCES.items() if problem.startswith(k)), None)
+    if source is None:
+        return []
+    out = []
+    for e in events:
+        if e.get("type") != "assistant":
+            continue
+        for block in (e.get("message") or {}).get("content") or []:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                text = json.dumps(block.get("input", {}))
+                at = text.find(source)
+                if at >= 0:
+                    out.append({"tool": block.get("name"), "context": text[max(0, at - 120):at + 120]})
+    return out
+
+
 def classify(events, init, result, stderr, exit_code=0):
     result_text = str(result.get("result") or "")
     if not events or not init:
@@ -173,6 +197,7 @@ def main():
         "start_utc": a.start, "end_utc": a.end, "exit_code": int(a.exit_code),
         "status": status, "detail": detail, "isolation_violations": violations,
         "study_repo_tool_calls": study_repo_hits,
+        "source_dandiset_mentions": source_mentions(events, a.problem),
         "cli_version": a.cli, "budget_usd": float(a.budget), "effort": a.effort,
         "memory_max_bytes": a.memory_max, "oom_kills": int(a.oom_kills),
         "result": {k: result.get(k) for k in ("subtype", "is_error", "num_turns", "duration_ms",
