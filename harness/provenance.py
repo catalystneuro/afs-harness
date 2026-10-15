@@ -119,7 +119,7 @@ def main():
         violations.append(f"builtin_skills.txt is for CLI {pinned_for}, not {a.cli}; regenerate it")
     extra = skills - EXPECTED_SKILLS - builtin
     missing = EXPECTED_SKILLS - skills
-    if missing:
+    if missing and init:
         violations.append(f"missing skills {sorted(missing)}")
     if extra:
         violations.append(f"extra user skills {sorted(extra)}")

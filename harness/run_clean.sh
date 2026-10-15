@@ -20,7 +20,7 @@
 #   OPENROUTER_API_KEY and a running proxy, for open-weights lanes (see lanes.tsv)
 # Optional:
 #   AFS_BG_WAIT_MS     how long headless mode waits for background tasks at exit (default 1 h)
-#   AFS_RUN_TIME_LIMIT wall-clock limit for the agent, as for timeout(1) (default 5h20m)
+#   AFS_RUN_TIME_LIMIT wall-clock limit for the agent, as for timeout(1) (default 320m)
 #   AFS_PYTHON         interpreter used to build each venv (default: python3.12 on PATH)
 #   AFS_SMOKE=1        replace the task with a one-word reply and a $1 cap, to check isolation
 #                      cheaply; the attempt is written under <sweep>/smoke/ instead of runs/
@@ -114,7 +114,9 @@ start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # A wall-clock limit for the agent, below GitHub's 6-hour job limit, so that a run that is still
 # going is stopped with its transcript and outputs kept (and scored as having run out of time)
 # instead of the job being killed and the run lost. timeout exits 124 when it fires.
-run_limit="${AFS_RUN_TIME_LIMIT:-5h20m}"
+# timeout(1) takes a single number with one unit suffix (320m, not 5h20m), so check it before starting.
+run_limit="${AFS_RUN_TIME_LIMIT:-320m}"
+timeout "$run_limit" true 2>/dev/null || fail "invalid AFS_RUN_TIME_LIMIT $run_limit"
 ( cd "$work" && timeout --kill-after=60 "$run_limit" env -i "${env_vars[@]}" claude -p "${prompt}${suffix}" \
     --model "$model" --effort "$effort" \
     --permission-prompts none --allowedTools "$allowed" \
