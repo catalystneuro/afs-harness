@@ -24,6 +24,14 @@
 #   AFS_PYTHON         interpreter used to build each venv (default: python3.12 on PATH)
 #   AFS_SMOKE=1        replace the task with a one-word reply and a $1 cap, to check isolation
 #                      cheaply; the attempt is written under <sweep>/smoke/ instead of runs/
+# For a response to a review (.github/workflows/review.yml), which continues a finished run:
+#   AFS_SEED_DIR       a finished attempt directory whose files the new attempt starts with
+#                      (its transcript, provenance and logs are left out)
+#   AFS_SEED_ATTEMPT   that attempt's number, used for the new attempt too, so that absolute
+#                      paths in the finished run's code still point at its own files; an
+#                      earlier try of the same number is moved aside to attempt-N.retry-K
+#   AFS_SEED_FREEZE    the finished attempt's pip freeze, installed in place of requirements.lock
+#   AFS_PROMPT_FILE    the prompt, in place of the problem's prompt in problems.tsv
 # Prints one tab-separated status line: lane problem rep attempt status detail
 set -u
 HARNESS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -54,22 +62,45 @@ if [ -n "$base_url" ]; then
 elif [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then auth_env=("CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN")
 elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then auth_env=("ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
 else fail "set CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) or ANTHROPIC_API_KEY"; fi
+if [ -n "${AFS_PROMPT_FILE:-}" ]; then
+  [ -s "$AFS_PROMPT_FILE" ] || fail "empty or missing AFS_PROMPT_FILE $AFS_PROMPT_FILE"
+  prompt="$(cat "$AFS_PROMPT_FILE")"
+fi
+if [ -n "${AFS_SEED_DIR:-}" ]; then
+  [ -d "$AFS_SEED_DIR" ] || fail "missing AFS_SEED_DIR $AFS_SEED_DIR"
+  [[ "${AFS_SEED_ATTEMPT:-}" =~ ^[0-9]+$ ]] || fail "AFS_SEED_DIR needs AFS_SEED_ATTEMPT"
+  [ -s "${AFS_SEED_FREEZE:-}" ] || fail "AFS_SEED_DIR needs AFS_SEED_FREEZE"
+fi
 if [ "${AFS_SMOKE:-0}" = 1 ]; then prompt="Reply with the single word: ready"; budget=1; kind=smoke; fi
 
 # ---- fresh attempt directories ----------------------------------------------------------
 cell="$sweep/$kind/$lane/$problem-$rep"
 mkdir -p "$cell"
 attempt=1; while [ -e "$cell/attempt-$attempt" ]; do attempt=$((attempt + 1)); done
+if [ -n "${AFS_SEED_DIR:-}" ]; then
+  attempt="$AFS_SEED_ATTEMPT"
+  if [ -e "$cell/attempt-$attempt" ]; then   # an earlier try that ended in an infrastructure error
+    k=1; while [ -e "$cell/attempt-$attempt.retry-$k" ]; do k=$((k + 1)); done
+    mv "$cell/attempt-$attempt" "$cell/attempt-$attempt.retry-$k"
+    mv "$sweep/.private/$kind/$lane/$problem-$rep/attempt-$attempt" "$sweep/.private/$kind/$lane/$problem-$rep/attempt-$attempt.retry-$k"
+  fi
+fi
 work="$cell/attempt-$attempt"
 priv="$sweep/.private/$kind/$lane/$problem-$rep/attempt-$attempt"   # config, home, venv: outside the agent's cwd
 mkdir -p "$work" "$priv/config/skills" "$priv/home"
+if [ -n "${AFS_SEED_DIR:-}" ]; then
+  ( cd "$AFS_SEED_DIR" && tar --exclude=./transcript.jsonl --exclude=./provenance.json --exclude=./stderr.log -cf - . ) \
+    | ( cd "$work" && tar -xf - ) || fail "copying AFS_SEED_DIR failed"
+fi
+# A given prompt is kept outside the agent's working directory, for the record.
+[ -n "${AFS_PROMPT_FILE:-}" ] && cp "$AFS_PROMPT_FILE" "$priv/prompt.md"
 
 cp -R "$HARNESS/skills/analyzing-dandi-datasets" "$HARNESS/skills/using-nemos" "$HARNESS/skills/using-pynapple" "$priv/config/skills/"
 bash "$HARNESS/write_settings.sh" "$priv/config"
 
 py="${AFS_PYTHON:-python3.12}"
 uv venv -q --python "$py" "$priv/venv" >/dev/null 2>&1 || fail "venv creation failed"
-VIRTUAL_ENV="$priv/venv" uv pip install -q -r "$HARNESS/requirements.lock" >/dev/null 2>&1 || fail "venv install failed"
+VIRTUAL_ENV="$priv/venv" uv pip install -q -r "${AFS_SEED_FREEZE:-$HARNESS/requirements.lock}" >/dev/null 2>&1 || fail "venv install failed"
 
 # ---- environment for the agent ----------------------------------------------------------
 env_vars=(

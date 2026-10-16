@@ -21,6 +21,8 @@ The output contract in `SYSTEM_ADDENDUM.md` differs from the exploratory one in 
 | `test_provenance.py` | Tests how `provenance.py` classifies outcomes, including a session cut off by a usage limit. |
 | `sweep.py` | Shuffles all cells with a fixed seed, runs them in a pool, and retries only infrastructure errors, identically for every lane. Logs every attempt. |
 | `.github/workflows/reexecute.yml` | Re-executes every cell of a sweep run from a clean copy in GitHub Actions, in the attempt's own rebuilt environment and under the sweep's memory cap, and uploads the claim check per cell. |
+| `.github/workflows/review.yml` | The review-and-response experiment: per finished run, a blinded review by a model through OpenRouter, a response session by the author in a copy of the run's working directory, and a second review of the revision. |
+| `review.py`, `review/` | Blinds a run, calls the reviewer with a strict JSON schema and no tools, and renders the review for the author's prompt with model and vendor names removed. `review/` holds the reviewer and author instructions. |
 | `reexecute.py` | Checks README numbers against the run's outputs, or re-executes the main script in a scratch copy (`--source notebook` or `clean`). `--corrupt` is the deliberate-corruption self-test. |
 | `lanes.tsv`, `problems.tsv` | Models and prompts. |
 | `SYSTEM_ADDENDUM.md`, `autonomy_suffix.txt` | What every agent is told, apart from the one-sentence prompt. |

@@ -1,0 +1,282 @@
+name: Review and response
+
+# The review-and-response experiment (REVIEW_LOOP_DESIGN.md in the study repository). For each
+# finished run (a "draft") of a sweep.yml run, one job:
+#   1. downloads the draft's artifact and finds its counted attempt;
+#   2. review round 1: a blinded copy of the draft goes to the arm's reviewer model through
+#      OpenRouter (harness/review.py), with no tools; skipped in the self-check arm;
+#   3. response: a new Claude Code session, run by harness/run_clean.sh exactly as in the sweep, in
+#      a copy of the draft's working directory at the same path, with the draft's own packages, and
+#      a prompt made of the problem's prompt and the review (or, in the self-check arm, an
+#      instruction to review the analysis itself);
+#   4. review round 2: the same reviewer reads the revised run, with its first review and the
+#      author's RESPONSE.md, and says which points are resolved; the author does not see it.
+# Started by hand with
+#   gh workflow run review.yml -f arm=gpt-review -f drafts="38499191681/opus-5-5-high-grid-1"
+#
+# The OpenRouter key is in the environment of the two review steps only, and the Claude token in
+# the preflight and response steps only. The reviews, which name the reviewer model, are kept in a
+# directory only root can read while the author runs; the author sees only the review text, with
+# model and vendor names removed. Results are uploaded as one artifact per draft, named
+# <arm>-<draft artifact>, holding the revised attempt and the reviews.
+
+on:
+  workflow_dispatch:
+    inputs:
+      arm:
+        description: "Arm: who reviews the draft"
+        type: choice
+        options: [gpt-review, opus-review, self-check]
+        required: true
+      drafts:
+        description: "Space-separated <sweep run id>/<artifact name> pairs, e.g. 38499191681/opus-5-5-high-grid-1"
+        required: true
+      time_limit:
+        description: "Wall-clock limit for the response session, as for timeout(1)"
+        default: 120m
+      max_parallel:
+        description: "Jobs at once"
+        default: "4"
+      account:
+        description: "Subscription: main uses CLAUDE_CODE_OAUTH_TOKEN, personal uses CLAUDE_CODE_OAUTH_TOKEN_PERSONAL"
+        type: choice
+        options: [main, personal]
+        default: main
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  AFS_CLI_VERSION: 2.1.296
+  AFS_SWEEP_DIR: /home/runner/sweep
+  AFS_MEMORY_MAX: 14G
+  AFS_SWAP_MAX: 2G
+  # Root-only storage for files the author must not read.
+  AFS_HELD: /var/afs-held
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      drafts: ${{ steps.plan.outputs.drafts }}
+    steps:
+      - id: plan
+        env:
+          DRAFTS: ${{ inputs.drafts }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          out = []
+          for d in os.environ["DRAFTS"].split():
+              m = re.fullmatch(r"(\d+)/([A-Za-z0-9._-]+)", d)
+              assert m, f"not <run id>/<artifact>: {d}"
+              out.append({"run": m[1], "artifact": m[2]})
+          print("drafts=" + json.dumps(out))
+          PY
+
+  review:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 200
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(inputs.max_parallel) }}
+      matrix:
+        draft: ${{ fromJSON(needs.plan.outputs.drafts) }}
+    name: ${{ inputs.arm }} ${{ matrix.draft.artifact }} (${{ inputs.account }})
+    env:
+      ARM: ${{ inputs.arm }}
+      REVIEWER: ${{ inputs.arm == 'gpt-review' && 'openai/gpt-6-astra' || inputs.arm == 'opus-review' && 'anthropic/claude-opus-5.5' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code, uv, and the sandbox
+        run: |
+          # The credential scrub runs the agent's commands in a sandbox built on bubblewrap and
+          # socat. Bubblewrap needs unprivileged user namespaces; Ubuntu 24.04 restricts them.
+          sudo apt-get install -y -q bubblewrap socat
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / --unshare-all true && echo "bubblewrap works"
+          npm install -g "@anthropic-ai/claude-code@$AFS_CLI_VERSION"
+          pip install --no-cache-dir uv
+          claude --version
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.draft.artifact }}
+          run-id: ${{ matrix.draft.run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/draft
+
+      - name: Find the draft, keep its files, and delete the download and the checkout
+        run: |
+          set -euo pipefail
+          # The counted attempt: status success or agent_ended, not cut off by a usage limit, as in the study.
+          python3 - "$RUNNER_TEMP/draft" > "$RUNNER_TEMP/draft.env" <<'PY'
+          import json, sys
+          from pathlib import Path
+          root = Path(sys.argv[1])
+          found = []
+          for p in root.glob("runs/*/*/attempt-*/provenance.json"):
+              prov = json.loads(p.read_text())
+              cut = any('"type":"result"' in l and "hit your" in l for l in open(p.parent / "transcript.jsonl", errors="replace"))
+              if prov["status"] in ("success", "agent_ended") and not cut:
+                  found.append((prov, p.parent))
+          assert len(found) == 1, f"expected one counted attempt, found {len(found)}"
+          prov, work = found[0]
+          freeze = root / ".private" / work.relative_to(root) / "pip-freeze.txt"
+          assert freeze.exists(), f"no pip freeze at {freeze}"
+          print(f"LANE={prov['lane']}\nPROBLEM={prov['problem']}\nREP={int(prov['rep'])}\nATTEMPT={prov['attempt']}\nWORK={work}\nFREEZE={freeze}")
+          PY
+          cat "$RUNNER_TEMP/draft.env"; source "$RUNNER_TEMP/draft.env"
+          sudo install -d -m 700 -o root "$AFS_HELD"
+          mkdir -p "$RUNNER_TEMP/seed"
+          ( cd "$WORK" && tar --exclude=./transcript.jsonl --exclude=./provenance.json --exclude=./stderr.log -cf - . ) | ( cd "$RUNNER_TEMP/seed" && tar -xf - )
+          cp "$FREEZE" "$RUNNER_TEMP/seed-freeze.txt"
+          # The draft's blinded view, for the reviewer: built from the full attempt (its final message too).
+          python3 harness/review.py blind "$WORK" "$RUNNER_TEMP/blind1"
+          # The draft's transcript and provenance would tell the author more than its files do.
+          sudo tar -C "$RUNNER_TEMP" -czf "$AFS_HELD/draft.tgz" draft && rm -rf "$RUNNER_TEMP/draft"
+          cat "$RUNNER_TEMP/draft.env" >> "$GITHUB_ENV"
+          mkdir -p "$AFS_SWEEP_DIR"
+          cp -R harness "$RUNNER_TEMP/harness"
+          cd "$RUNNER_TEMP" && find "$GITHUB_WORKSPACE" -mindepth 1 -delete
+
+      - name: Review, round 1
+        if: inputs.arm != 'self-check'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          [ -n "$OPENROUTER_API_KEY" ] || { echo "::error::Set the OPENROUTER_API_KEY secret"; exit 1; }
+          pip install --no-cache-dir -q openai
+          python3 "$RUNNER_TEMP/harness/review.py" review "$RUNNER_TEMP/blind1" --model "$REVIEWER" --round 1 --out "$RUNNER_TEMP/review1.json"
+          python3 "$RUNNER_TEMP/harness/review.py" render "$RUNNER_TEMP/review1.json" > "$RUNNER_TEMP/review1.txt"
+          sudo mv "$RUNNER_TEMP/review1.json" "$AFS_HELD/"
+
+      - name: Write the author's prompt
+        run: |
+          set -euo pipefail
+          h="$RUNNER_TEMP/harness"
+          { awk -F'\t' -v k="$PROBLEM" '$1==k{print $2}' "$h/problems.tsv"; echo
+            if [ "$ARM" = self-check ]; then cat "$h/review/author_self_check.md"
+            else cat "$h/review/author_response.md"; echo; cat "$RUNNER_TEMP/review1.txt"; fi
+          } > "$RUNNER_TEMP/prompt.md"
+          rm -f "$RUNNER_TEMP/review1.txt"
+          [ -n "$(head -c1 "$RUNNER_TEMP/prompt.md")" ] || { echo "::error::Empty prompt"; exit 1; }
+          wc -c "$RUNNER_TEMP/prompt.md"
+
+      - name: Check the token, the permission mode, the agent's shell, and its Python
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.account == 'personal' && secrets.CLAUDE_CODE_OAUTH_TOKEN_PERSONAL || inputs.account == 'main' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+        run: |
+          set +e -uo pipefail
+          # Empty when the chosen account's secret is not set; the expression never falls back to the other one.
+          [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || { echo "::error::No token for account ${{ inputs.account }}; set its secret"; exit 1; }
+          h="$RUNNER_TEMP/harness"; pre="$RUNNER_TEMP/preflight"; mkdir -p "$pre/work" "$pre/home"
+          bash "$h/write_settings.sh" "$pre/config"
+          uv venv -q --python python3.12 "$pre/venv" && VIRTUAL_ENV="$pre/venv" uv pip install -q -r "$h/requirements.lock"
+          model=$(awk -F'\t' -v k="$LANE" '$1==k{print $2}' "$h/lanes.tsv")
+          # Same environment and settings as run_clean.sh. The agent runs one command that prints the
+          # length of the token as its commands see it (0 when scrubbed), imports the analysis stack,
+          # and writes to the remfile cache directory, its home directory, and its Python environment.
+          cd "$pre/work"
+          # A spent usage limit names its reset time. Wait for it (up to 3 hours) and try once more,
+          # so a lane that hits the limit pauses instead of failing every queued cell.
+          for try in 1 2; do
+          env -i HOME="$pre/home" JUPYTER_DATA_DIR="$pre/home/jupyter-data" CLAUDE_CONFIG_DIR="$pre/config" CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 \
+            DISABLE_AUTOUPDATER=1 DISABLE_TELEMETRY=1 VIRTUAL_ENV="$pre/venv" \
+            PATH="$pre/venv/bin:/usr/local/bin:/usr/bin:/bin:$(dirname "$(command -v claude)")" \
+            claude -p 'Use the Bash tool to run exactly this command: printf "%s:" "$(printenv CLAUDE_CODE_OAUTH_TOKEN | wc -c)"; python -c "import pynapple, pynwb, lindi, remfile" && mkdir -p /tmp/remfile_cache && touch /tmp/remfile_cache/.w && mkdir -p "$(jupyter --data-dir)" && touch "$VIRTUAL_ENV/.w" && echo shell-ok. Then reply with only the line it printed.' \
+            --model "$model" --max-turns 3 --setting-sources user --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
+            --output-format stream-json --verbose --permission-prompts none --allowedTools Bash --add-dir "$pre/home" "$pre/venv" \
+            > "$pre/preflight.jsonl" 2> "$pre/preflight.err"
+          result=$(jq -r 'select(.type=="result") | .result' "$pre/preflight.jsonl")
+          wait=$(python3 -c "import sys; sys.path.insert(0, '$h'); from provenance import seconds_until_reset, USAGE_LIMIT_RE; t = sys.argv[1]; w = seconds_until_reset(t) if USAGE_LIMIT_RE.search(t) else None; print('' if w is None else int(w))" "$result")
+          [ -n "$wait" ] && [ "$try" = 1 ] && [ "$wait" -le 10800 ] || break
+          echo "usage limit: $result; waiting $((wait / 60)) min for the reset"
+          sleep $((wait + 60))
+          done
+          mode=$(jq -r 'select(.type=="system" and .subtype=="init") | .permissionMode' "$pre/preflight.jsonl")
+          # The command's own output, from the transcript; the model's reply can paraphrase it.
+          out=$(jq -r 'select(.type=="user") | .message.content[]? | select(.type=="tool_result") | .content | if type=="string" then . else (map(.text? // "") | join("")) end' "$pre/preflight.jsonl")
+          echo "permission mode: $mode; command output: $out"
+          tail -c 1000 "$pre/preflight.err"
+          case "$result" in
+            *"Failed to authenticate"*) echo "::error::The token for account ${{ inputs.account }} did not authenticate: $result"; exit 1;;
+          esac
+          [[ "$out" == *shell-ok* ]] || { echo "::error::The agent's shell, Python stack, or a write to the cache, home, or venv failed: $out $result"; exit 1; }
+          [[ "$out" =~ (^|$'\n')0:shell-ok ]] || { echo "::error::The token is visible to the agent's commands"; exit 1; }
+          [ "$mode" = default ] || { echo "::error::Claude Code started in permission mode $mode, not default"; exit 1; }
+
+      - name: Response
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.account == 'personal' && secrets.CLAUDE_CODE_OAUTH_TOKEN_PERSONAL || inputs.account == 'main' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          AFS_RUN_TIME_LIMIT: ${{ inputs.time_limit }}
+        run: |
+          # The same memory cap and resource log as the sweep.
+          sudo mkdir -p /sys/fs/cgroup/agent
+          echo "$AFS_MEMORY_MAX" | sudo tee /sys/fs/cgroup/agent/memory.max >/dev/null
+          echo "$AFS_SWAP_MAX" | sudo tee /sys/fs/cgroup/agent/memory.swap.max >/dev/null
+          echo $$ | sudo tee /sys/fs/cgroup/agent/cgroup.procs >/dev/null
+          [ "$(cut -d: -f3 /proc/self/cgroup)" = /agent ] || { echo "::error::Could not move the cell into the capped cgroup"; exit 1; }
+          ( n=0; while sleep 10; do
+              line="$(date -u +%H:%M:%S) ram_mb=$(free -m | awk '/Mem:/{print $3}') swap_mb=$(free -m | awk '/Swap:/{print $3}') disk_free_gb=$(df -BG --output=avail / | tail -1 | tr -dc 0-9)"
+              echo "$line" >> "$AFS_SWEEP_DIR/memory.log"
+              n=$((n + 1)); [ $((n % 6)) -eq 0 ] && echo "resources: $line"
+            done ) &
+          AFS_SEED_DIR="$RUNNER_TEMP/seed" AFS_SEED_ATTEMPT="$ATTEMPT" AFS_SEED_FREEZE="$RUNNER_TEMP/seed-freeze.txt" \
+            AFS_PROMPT_FILE="$RUNNER_TEMP/prompt.md" \
+            python3 "$RUNNER_TEMP/harness/sweep.py" --lanes "$LANE" --problems "$PROBLEM" --rep "$REP" --par 1
+          status=$?
+          echo "peak RAM sample: $(sort -t= -k2 -n "$AFS_SWEEP_DIR/memory.log" | tail -1)"
+          exit $status
+
+      - name: Review, round 2
+        if: inputs.arm != 'self-check'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          work=$(printf '%s/runs/%s/%s-%02d/attempt-%s' "$AFS_SWEEP_DIR" "$LANE" "$PROBLEM" "$REP" "$ATTEMPT")
+          status=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['status'])" "$work/provenance.json")
+          [[ "$status" == success || "$status" == agent_ended ]] || { echo "::error::Response ended $status; no second review"; exit 1; }
+          python3 "$RUNNER_TEMP/harness/review.py" blind "$work" "$RUNNER_TEMP/blind2"
+          sudo cp "$AFS_HELD/review1.json" "$RUNNER_TEMP/review1.json" && sudo chown "$USER" "$RUNNER_TEMP/review1.json"
+          python3 "$RUNNER_TEMP/harness/review.py" review "$RUNNER_TEMP/blind2" --model "$REVIEWER" --round 2 \
+            --first "$RUNNER_TEMP/review1.json" --out "$RUNNER_TEMP/review2.json"
+
+      - name: Collect the reviews
+        if: always()
+        run: |
+          mkdir -p "$AFS_SWEEP_DIR/reviews"
+          sudo test -f "$AFS_HELD/review1.json" && sudo cp "$AFS_HELD/review1.json" "$AFS_SWEEP_DIR/reviews/"
+          [ -f "$RUNNER_TEMP/review2.json" ] && cp "$RUNNER_TEMP/review2.json" "$AFS_SWEEP_DIR/reviews/"
+          cp "$RUNNER_TEMP/prompt.md" "$AFS_SWEEP_DIR/reviews/" 2>/dev/null
+          printf 'arm=%s\nreviewer=%s\ndraft_run=%s\ndraft_artifact=%s\n' "$ARM" "$REVIEWER" "${{ matrix.draft.run }}" "${{ matrix.draft.artifact }}" > "$AFS_SWEEP_DIR/reviews/arm.txt"
+          sudo chown -R "$USER" "$AFS_SWEEP_DIR/reviews"; true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.arm }}-${{ matrix.draft.artifact }}
+          path: |
+            ${{ env.AFS_SWEEP_DIR }}
+            !${{ env.AFS_SWEEP_DIR }}/.private/**/venv/**
+            !${{ env.AFS_SWEEP_DIR }}/.private/**/home/**
+            !${{ env.AFS_SWEEP_DIR }}/**/*_cache/**
+            !${{ env.AFS_SWEEP_DIR }}/**/*.nwb
+          include-hidden-files: true
+          retention-days: 90
+          if-no-files-found: ignore

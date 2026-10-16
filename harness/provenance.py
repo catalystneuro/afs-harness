@@ -212,6 +212,7 @@ def main():
             "skills_tree": tree_hash(harness / "skills"),
             "requirements_lock": file_hash(harness / "requirements.lock"),
             "pip_freeze": file_hash(priv / "pip-freeze.txt") if (priv / "pip-freeze.txt").exists() else None,
+            "prompt_file": file_hash(priv / "prompt.md") if (priv / "prompt.md").exists() else None,
         },
     }
     (work / "provenance.json").write_text(json.dumps(prov, indent=1, default=str))
